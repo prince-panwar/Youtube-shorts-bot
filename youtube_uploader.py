@@ -24,7 +24,9 @@ def authenticate_youtube():
             flow = InstalledAppFlow.from_client_secrets_file(
                 "client_secrets.json", SCOPES
             )
-            creds = flow.run_local_server(port=0)
+            # Use run_local_server with open_browser=False for remote environments
+            # This will print a URL that the user can visit on their local machine
+            creds = flow.run_local_server(port=0, open_browser=False)
         
         # Save the credentials for the next run
         with open("token.json", "w") as token:
@@ -46,7 +48,7 @@ def upload_video(file_path, title, description, tags, category_id="22"):
             "categoryId": category_id
         },
         "status": {
-            "privacyStatus": "private", # Start private to check for copyright
+            "privacyStatus": "public", 
             "selfDeclaredMadeForKids": False
         }
     }

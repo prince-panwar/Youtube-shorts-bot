@@ -305,21 +305,73 @@ class YouTubeShortsBot:
             traceback.print_exc()
             return None
 
+    def generate_metadata(self, topic, script_data):
+        """Generates optimized YouTube metadata using Gemini."""
+        print(f"📝 Generating metadata for: {topic}...")
+        
+        # Create a summary of the script for context
+        script_text = " ".join([scene['text'] for scene in script_data])
+        
+        prompt = (
+            f"Generate YouTube Shorts metadata for a video about '{topic}'. "
+            f"Script context: {script_text[:500]}... "
+            "Output strictly valid JSON. "
+            "Structure: {"
+            "'title': 'Catchy Title #Shorts', "
+            "'description': 'Engaging description with keywords...', "
+            "'tags': ['tag1', 'tag2', 'tag3', 'tag4', 'tag5']"
+            "}"
+        )
+
+        try:
+            response = self.model.generate_content(prompt)
+            raw_text = response.text.strip()
+            if raw_text.startswith("```json"): raw_text = raw_text[7:]
+            if raw_text.startswith("```"): raw_text = raw_text[3:]
+            if raw_text.endswith("```"): raw_text = raw_text[:-3]
+            
+            metadata = json.loads(raw_text.strip())
+            print("✅ Metadata generated.")
+            return metadata
+        except Exception as e:
+            print(f"❌ Metadata Error: {e}")
+            # Fallback
+            return {
+                "title": f"{topic} #Shorts",
+                "description": f"Interesting facts about {topic}.",
+                "tags": ["shorts", "facts", "educational"]
+            }
+
 # --- EXECUTION BLOCK ---
+from youtube_uploader import upload_video
+
 if __name__ == "__main__":
     bot = YouTubeShortsBot()
     
-    # 1. Find Trend
-    trend = bot.get_trending_topic()
+    # 1. Get Trend
+    topic = bot.get_trending_topic()
     
-    # 2. Generate Script (JSON)
-    if trend:
-        script_data = bot.generate_script(trend)
+    # 2. Generate Script
+    script_data = bot.generate_script(topic)
     
-    # 3. Get Assets (Multi-scene)
     if script_data:
+        # 3. Download Assets
         script_data = bot.download_stock_assets(script_data)
-    
-    # 4. Edit (Multi-scene)
-    if script_data:
-        final_video = bot.create_video(script_data)
+        
+        # 4. Create Video
+        video_path = bot.create_video(script_data)
+        
+        # 5. Generate Metadata & Upload
+        if video_path and os.path.exists(video_path):
+            metadata = bot.generate_metadata(topic, script_data)
+            print("🚀 Starting Upload...")
+            upload_video(
+                video_path, 
+                metadata['title'], 
+                metadata['description'], 
+                metadata['tags']
+            )
+        else:
+            print("❌ Video creation failed, skipping upload.")
+    else:
+        print("❌ Script generation failed.")
