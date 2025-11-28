@@ -56,68 +56,129 @@ class YouTubeShortsBot:
                 print(f"Failed to delete {file_path}. Reason: {e}")
 
     def get_trending_topic(self, region='US'):
-        """Fetches a trending topic from Google Trends RSS feed."""
-        print("🔍 Searching for trends via RSS...")
+        """Fetches trending topics (Daily/Ent/Sports), filters used ones, and selects via Gemini."""
+        print("🔍 Searching for fresh trends (Daily + Ent + Sports)...")
         try:
-            url = f"https://trends.google.com/trending/rss?geo={region}"
-            response = requests.get(url)
-            if response.status_code != 200:
-                raise Exception(f"RSS Fetch failed: {response.status_code}")
+            # 1. Load History (Topics used today)
+            used_topics = []
+            if os.path.exists('daily_stats.json'):
+                try:
+                    with open('daily_stats.json', 'r') as f:
+                        stats = json.load(f)
+                        if stats.get("date") == str(datetime.date.today()):
+                            used_topics = stats.get("topics", [])
+                            print(f"  🚫 Excluding used topics: {used_topics}")
+                except:
+                    pass
+
+            # 2. Fetch Multiple RSS Feeds
+            urls = [
+                f"https://trends.google.com/trending/rss?geo={region}",        # Daily Trends
+                f"https://trends.google.com/trending/rss?geo={region}&cat=e", # Entertainment
+                f"https://trends.google.com/trending/rss?geo={region}&cat=s"  # Sports
+            ]
             
-            root = ET.fromstring(response.content)
-            # Namespace for media/ht (not strictly needed if we just find 'title' in items)
-            # Items are under channel/item
-            items = root.findall('.//item')
-            if not items:
-                raise Exception("No items found in RSS")
+            all_items = []
+            for url in urls:
+                try:
+                    response = requests.get(url)
+                    if response.status_code == 200:
+                        root = ET.fromstring(response.content)
+                        items = root.findall('.//item')
+                        for item in items:
+                            title = item.find('title').text
+                            # Basic cleanup
+                            if title:
+                                all_items.append(title.strip())
+                except Exception as e:
+                    print(f"  ⚠️ Failed to fetch {url}: {e}")
+
+            if not all_items:
+                raise Exception("No items found in any RSS feed")
+
+            # 3. Filter & Randomize
+            # Remove duplicates and used topics
+            unique_items = list(set(all_items))
+            fresh_items = [item for item in unique_items if item not in used_topics]
             
-            # Pick a random item
-            item = random.choice(items[:10])
-            topic = item.find('title').text
-            print(f"📈 Trend Found (RSS): {topic}")
+            if not fresh_items:
+                print("  ⚠️ All trends used! Falling back to full list.")
+                fresh_items = unique_items
+
+            random.shuffle(fresh_items)
+            trends_list = ", ".join(fresh_items[:25]) # Top 25 random fresh items
+            
+            print(f"  📊 Analyzing batch: {trends_list[:100]}...")
+            
+            # 4. Gemini Selection
+            prompt = (
+                f"From this list of trending topics: [{trends_list}], "
+                "identify the single most famous Hollywood actor, Musician, or Football player (Soccer/NFL). "
+                "Prioritize global megastars. "
+                "If no specific famous person is found, pick the most interesting/viral topic from the list. "
+                f"Do NOT pick any of these: {used_topics}. "
+                "Return ONLY the name of the person or topic."
+            )
+            
+            response = self.model.generate_content(prompt)
+            topic = response.text.strip()
+            
+            # Cleanup
+            if '"' in topic: topic = topic.replace('"', '')
+            if '\n' in topic: topic = topic.split('\n')[0]
+            
+            print(f"🌟 Trend Selected: {topic}")
             return topic
+            
         except Exception as e:
-            print(f"⚠️ RSS trends failed: {e}. Using fallback.")
-            return "Amazing Space Facts"
+            print(f"⚠️ Trend search failed: {e}. Using fallback.")
+            return "Dwayne Johnson"
 
     def generate_script(self, topic):
         """Generates a structured JSON script with visual cues using Gemini."""
         print(f"📝 Writing script for: {topic}...")
         
         prompt = (
-            f"Create a dynamic YouTube Shorts script about '{topic}'. "
+            f"Create a high-performing, dynamic YouTube Shorts script about '{topic}'. "
+            "The script must adhere to a strict structure designed for maximum retention: "
+            "1. Scene 1 must be a **Strong Hook** (a shocking statement or immediate question). "
+            "2. Scene 2 must introduce the core topic quickly. "
+            "3. The final scene must include an explicit **Call-to-Action** (e.g., 'Like and subscribe!'). "
             "Output strictly valid JSON. No markdown formatting. "
-            "Structure: a list of objects, where each object represents a scene. "
+            "Structure: A JSON LIST of objects. Do not wrap in a dictionary. "
+            "Example: "
+            '[{"text": "Hook line here", "visual_query": "shocked face"}, {"text": "Fact here", "visual_query": "space"}] '
             "Each object must have: "
-            "'text' (the spoken narration, max 20 words per scene), "
-            "'visual_query' (a specific, simple keyword for Pexels video search, e.g., 'space nebula', 'happy dog'). "
-            "Total duration should be under 50 seconds (approx 130 words total). "
-            "Ensure the visual queries match the text context perfectly. "
-            "Example: [{'text': 'Did you know space is silent?', 'visual_query': 'space stars'}, ...]"
+            "'text' (max 15 words), "
+            "'visual_query' (simple keyword for Pexels). "
+            "Total duration under 50 seconds."
         )
 
         try:
             response = self.model.generate_content(prompt)
             raw_text = response.text.strip()
-            # Clean up potential markdown code blocks
-            if raw_text.startswith("```json"):
-                raw_text = raw_text[7:]
-            if raw_text.startswith("```"):
-                raw_text = raw_text[3:]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3]
+            if raw_text.startswith("```json"): raw_text = raw_text[7:]
+            if raw_text.startswith("```"): raw_text = raw_text[3:]
+            if raw_text.endswith("```"): raw_text = raw_text[:-3]
             
             script_data = json.loads(raw_text.strip())
+            
+            # Validation
+            if not isinstance(script_data, list):
+                raise ValueError("Script data is not a list")
+            for item in script_data:
+                if not isinstance(item, dict):
+                    raise ValueError("Script items are not dictionaries")
+                if 'text' not in item or 'visual_query' not in item:
+                    raise ValueError("Missing 'text' or 'visual_query' keys")
+
             print(f"DEBUG: script_data type: {type(script_data)}")
-            print(f"DEBUG: script_data content: {script_data}")
             print("✅ Script generated (JSON).")
             return script_data
-            print(f"DEBUG: script_data type: {type(script_data)}")
-            print(f"DEBUG: script_data content: {script_data}")
-            print("✅ Script generated (JSON).")
-            return script_data
+            
         except Exception as e:
-            print(f"❌ AI Error: {e}")
+            print(f"❌ Script Generation Error: {e}")
+            # print(f"DEBUG: Raw response: {raw_text}") # raw_text might not be defined if error happens before
             return None
 
     async def generate_audio_async(self, text, filename="voiceover.mp3"):
@@ -331,6 +392,8 @@ class YouTubeShortsBot:
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
             
             metadata = json.loads(raw_text.strip())
+            print(f"DEBUG: metadata type: {type(metadata)}")
+            print(f"DEBUG: metadata content: {metadata}")
             print("✅ Metadata generated.")
             return metadata
         except Exception as e:
