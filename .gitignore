@@ -5,3 +5,4 @@ venv
 client_secrets.json
 .env
 token.json
+scheduler.log
